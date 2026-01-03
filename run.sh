@@ -27,6 +27,9 @@ if ! ping -c 1 8.8.8.8 &> /dev/null; then
     exit 1
 fi
 
+REAL_USER=$(logname)
+USER_HOME=$(eval echo "~$REAL_USER")
+
 # 2. OS DETEKTĒŠANA
 source /etc/os-release
 if [[ -n "$DEBIAN_CODENAME" ]]; then
@@ -40,18 +43,12 @@ fi
 print_step "Tīrīšana"
 
 log "Dzēš vecos un konfliktējošos failus..."
-
-# Signal
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
 rm -f /etc/apt/sources.list.d/signal-desktop.list
 rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
-
-# Spotify (Noņemts)
 rm -f /etc/apt/sources.list.d/spotify.list
 rm -f /usr/share/keyrings/spotify-client-keyring.gpg
 rm -f /etc/apt/trusted.gpg.d/spotify.gpg
-
-# Mullvad & Citi
 rm -f /etc/apt/sources.list.d/mullvad.list
 rm -f /etc/apt/sources.list.d/brave-browser-release.list
 rm -f /etc/apt/sources.list.d/1password.list
@@ -66,18 +63,16 @@ rm -f /etc/default/zram-tools
 log "Mēģina salabot apt..."
 apt clean
 apt install -f -y
-apt install -y curl wget gpg software-properties-common
+apt install -y curl wget gpg software-properties-common unzip
 
 # 4. REPOZITORIJU KONFIGURĀCIJA
 print_step "Repozitoriju Atjaunošana"
 
-# Funkcija standarta repo pievienošanai
 add_key_and_repo() {
     local key_url=$1
     local keyring_path=$2
     local repo_line=$3
     local list_file=$4
-
     log "Konfigurē: $(basename "$list_file")"
     wget -qO- "$key_url" | gpg --dearmor --yes -o "$keyring_path"
     chmod 644 "$keyring_path"
@@ -136,7 +131,6 @@ log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
 
 # KODEKI
-log "Instalē kodekus..."
 if [[ "$ID" == "linuxmint" ]] || [[ "$IS_LMDE" == true ]]; then
     apt install -y mint-meta-codecs
 elif [[ "$ID" == "ubuntu" ]]; then
@@ -171,9 +165,6 @@ install_flatpak "org.videolan.VLC"
 # 7. PYTHON & AI
 print_step "AI & Tulkošana"
 
-REAL_USER=$(logname)
-USER_HOME=$(eval echo "~$REAL_USER")
-
 sudo -u "$REAL_USER" pipx install libretranslate --force
 sudo -u "$REAL_USER" pipx ensurepath
 
@@ -196,13 +187,10 @@ cat <<EOF > "$KOBOLD_DIR/start_kobold.sh"
 #!/bin/bash
 cd $KOBOLD_DIR
 if lspci | grep -i nvidia > /dev/null; then
-    echo "Nvidia GPU atrasts! Izmanto CUDA..."
     ./koboldcpp --model llama-3-8b-instruct.gguf --usecublas --gpulayers 99 --port 5001 --smartcontext --contextsize 8192
 elif lspci | grep -i -E "amd|ati|radeon" > /dev/null; then
-    echo "AMD Radeon GPU atrasts! Izmanto Vulkan..."
     ./koboldcpp --model llama-3-8b-instruct.gguf --usevulkan --gpulayers 99 --port 5001 --smartcontext --contextsize 8192
 else
-    echo "GPU nav atrasts. Izmanto CPU..."
     ./koboldcpp --model llama-3-8b-instruct.gguf --port 5001 --smartcontext --contextsize 8192
 fi
 EOF
@@ -211,24 +199,16 @@ chown -R "$REAL_USER:$REAL_USER" "$KOBOLD_DIR"
 
 # 8. DROŠĪBAS & KODOLA HARDENING
 print_step "Drošības Hardening"
-
-# UFW (Firewall)
-log "Konfigurē UFW Ugunsmūri..."
 ufw enable
 ufw logging off
-
-# Kernel Hardening (Restrict dmesg)
 echo "kernel.dmesg_restrict=1" > /etc/sysctl.d/6-dmesg-sudo.conf
 sysctl -p /etc/sysctl.d/6-dmesg-sudo.conf 2>/dev/null
 
 # 9. CPU & DISK
 print_step "CPU & Diska Optimizācija"
-
-# CPU Performance
 echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
 systemctl restart cpufrequtils 2>/dev/null
 
-# Zswap & Swappiness & Dirty Bytes
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
 
@@ -252,7 +232,6 @@ sysctl -p /etc/sysctl.d/99-mint-swappiness.conf
 # GRUB & Initramfs
 GRUB_FILE="/etc/default/grub"
 if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
-    log "Atjaunina GRUB..."
     sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
     update-grub
 fi
@@ -298,34 +277,68 @@ EOF
 apt install -y papirus-icon-theme fonts-noto-color-emoji
 update-icon-caches /usr/share/icons/* 2>/dev/null
 
-# UI: VIZUĀLO EFEKTU ATSLĒGŠANA + WIN11 PRECISION
+# --- FLOATING MENU & CINNAMENU INSTALĀCIJA ---
 if [ -f "/usr/bin/cinnamon-session" ]; then
-    log "Konfigurē Cinnamon (Windows 11 Precision Style)..."
+    log "Konfigurē Cinnamon (Windows 11 Floating Style)..."
     
-    # Animācijas & Tiling
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface enable-animations false 2>/dev/null
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enable-tiling false 2>/dev/null
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.muffin unredirect-fullscreen-windows true 2>/dev/null
+    # 1. Instalē Cinnamenu (Win11 style grid menu)
+    APPLETS_DIR="$USER_HOME/.local/share/cinnamon/applets"
+    mkdir -p "$APPLETS_DIR"
     
-    # Tēma
+    if [ ! -d "$APPLETS_DIR/Cinnamenu@json" ]; then
+        log "Lejupielādē Cinnamenu..."
+        wget -O "$USER_HOME/cinnamenu.zip" https://cinnamon-spices.linuxmint.com/files/applets/Cinnamenu@json.zip
+        unzip -q "$USER_HOME/cinnamenu.zip" -d "$APPLETS_DIR"
+        rm "$USER_HOME/cinnamenu.zip"
+        chown -R "$REAL_USER:$REAL_USER" "$APPLETS_DIR/Cinnamenu@json"
+    fi
+
+    # 2. Izveido Floating CSS Tēmu
+    THEMES_DIR="$USER_HOME/.themes"
+    mkdir -p "$THEMES_DIR"
+    FLOAT_THEME_DIR="$THEMES_DIR/Mint-Y-Win11-Float"
+    
+    # Kopējam esošo Mint-Y-Dark-Aqua
+    if [ -d "/usr/share/themes/Mint-Y-Dark-Aqua" ]; then
+        cp -r "/usr/share/themes/Mint-Y-Dark-Aqua" "$FLOAT_THEME_DIR"
+        
+        # Pievienojam CSS maģiju (Floating effect)
+        CSS_FILE="$FLOAT_THEME_DIR/cinnamon/cinnamon.css"
+        echo "
+/* Windows 11 Floating Menu Hack */
+.menu {
+  margin-bottom: 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+}
+" >> "$CSS_FILE"
+        
+        chown -R "$REAL_USER:$REAL_USER" "$THEMES_DIR"
+    fi
+
+    # 3. Aktivizē Iestatījumus
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Dark-Aqua' 2>/dev/null
     
-    # PANEĻA IZMĒRI (Win11 Standarti)
-    # Augstums: 48px
+    # Aktivizējam jauno tēmu
+    if [ -d "$FLOAT_THEME_DIR" ]; then
+        sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Win11-Float' 2>/dev/null
+    fi
+    
+    # Paneļa izmēri (48px)
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panels-height "['1:48']" 2>/dev/null
-    
-    # Ikonu izmēri (Center: 32px, Right: 22px, Left: 0px)
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panel-zone-icon-sizes '[{"panelId": 1, "left": 0, "center": 32, "right": 22}]' 2>/dev/null
     
-    # Izkārtojums
-    WIN11_LAYOUT="['panel1:center:0:menu@cinnamon.org', 'panel1:center:1:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:network@cinnamon.org', 'panel1:right:7:sound@cinnamon.org', 'panel1:right:8:power@cinnamon.org', 'panel1:right:9:calendar@cinnamon.org', 'panel1:right:10:cornerbar@cinnamon.org']"
+    # Ieslēdzam Cinnamenu (Menu vietā)
+    # Piezīme: Tas aizstāj default menu. ID 'Cinnamenu@json'
+    WIN11_LAYOUT="['panel1:center:0:Cinnamenu@json', 'panel1:center:1:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:network@cinnamon.org', 'panel1:right:7:sound@cinnamon.org', 'panel1:right:8:power@cinnamon.org', 'panel1:right:9:calendar@cinnamon.org', 'panel1:right:10:cornerbar@cinnamon.org']"
+    
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enabled-applets "$WIN11_LAYOUT" 2>/dev/null
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v46 - Win11 Precision).${NC}"
+echo -e "${GREEN}Sistēma konfigurēta (v47 - Win11 Floating).${NC}"
+echo "Start Menu: Cinnamenu (Grid capable) + Floating Effect."
 echo "UI: Panelis 48px, Ikonas 32px/22px."
-echo "Clean: Spotify un Signal konflikti novērsti."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
