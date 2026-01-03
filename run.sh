@@ -36,44 +36,42 @@ else
     log "Sistēma: $NAME ($VERSION_CODENAME)"
 fi
 
-# 3. AGRESĪVĀ TĪRĪŠANA (REPOZITORIJI)
-print_step "Bojāto Repozitoriju Dzēšana"
+# 3. AGRESĪVĀ TĪRĪŠANA
+print_step "Tīrīšana"
 
-log "Dzēš visu, kas varētu izraisīt konfliktus..."
+log "Dzēš vecos un konfliktējošos failus..."
 
-# 1. Signal (Galvenais vaininieks 'Malformed stanza')
+# Signal (tīrīšana)
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
 rm -f /etc/apt/sources.list.d/signal-desktop.list
-rm -f /etc/apt/sources.list.d/*signal*.list
-rm -f /etc/apt/sources.list.d/*signal*.sources
+rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
 
-# 2. Spotify (NO_PUBKEY fix)
+# Spotify (tīrīšana - dzēšam visas iepriekšējās versijas)
 rm -f /etc/apt/sources.list.d/spotify.list
-rm -f /etc/apt/sources.list.d/*spotify*.list
+rm -f /usr/share/keyrings/spotify-client-keyring.gpg
+rm -f /etc/apt/trusted.gpg.d/spotify.gpg
 
-# 3. Mullvad (NO_PUBKEY fix)
+# Mullvad & Citi
 rm -f /etc/apt/sources.list.d/mullvad.list
-
-# 4. Citi
 rm -f /etc/apt/sources.list.d/brave-browser-release.list
 rm -f /etc/apt/sources.list.d/1password.list
-
-# Dzēšam vecās atslēgas, lai lejupielādētu svaigas
-rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
-rm -f /usr/share/keyrings/spotify-client-keyring.gpg
-rm -f /usr/share/keyrings/mullvad-keyring.asc
 rm -f /usr/share/keyrings/mullvad-keyring.gpg
 
-# Self-Repair (Pēc failu dzēšanas)
+# ZRAM
+apt purge -y zram-tools zram-config 2>/dev/null
+rm -f /etc/sysctl.d/7-swappiness.conf
+rm -f /etc/default/zram-tools
+
+# Self-Repair
 log "Mēģina salabot apt..."
 apt clean
 apt install -f -y
 apt install -y curl wget gpg software-properties-common
 
-# 4. REPOZITORIJU KONFIGURĀCIJA (CLEAN INSTALL)
+# 4. REPOZITORIJU KONFIGURĀCIJA
 print_step "Repozitoriju Atjaunošana"
 
-# Funkcija drošai atslēgu pievienošanai
+# Funkcija standarta repo pievienošanai
 add_key_and_repo() {
     local key_url=$1
     local keyring_path=$2
@@ -81,27 +79,25 @@ add_key_and_repo() {
     local list_file=$4
 
     log "Konfigurē: $(basename "$list_file")"
-    
-    # Lejupielādē atslēgu (wget -> gpg dearmor)
     wget -qO- "$key_url" | gpg --dearmor --yes -o "$keyring_path"
     chmod 644 "$keyring_path"
-    
-    # Izveido repo failu
     echo "$repo_line" > "$list_file"
 }
 
-# --- Spotify ---
-# Izmantojam oficiālo metodi
-wget -qO- "http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x6224F9941A8AA6D1" | gpg --dearmor --yes -o /usr/share/keyrings/spotify-client-keyring.gpg
-chmod 644 /usr/share/keyrings/spotify-client-keyring.gpg
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
+# --- SPOTIFY (OFFICIAL METHOD) ---
+log "Konfigurē: Spotify (Official)..."
+# 1. Key (from /8, save to trusted.gpg.d)
+curl -sS https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/spotify.gpg
+chmod 644 /etc/apt/trusted.gpg.d/spotify.gpg
+# 2. Repo (from /2)
+echo "deb https://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
 
 # --- Mullvad ---
 wget -qO- https://repository.mullvad.net/deb/mullvad-keyring.asc | gpg --dearmor --yes -o /usr/share/keyrings/mullvad-keyring.gpg
 chmod 644 /usr/share/keyrings/mullvad-keyring.gpg
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.gpg] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
 
-# --- Signal (Xenial repo works for all) ---
+# --- Signal ---
 add_key_and_repo \
     "https://updates.signal.org/desktop/apt/keys.asc" \
     "/usr/share/keyrings/signal-desktop-keyring.gpg" \
@@ -122,7 +118,6 @@ add_key_and_repo \
     "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main" \
     "/etc/apt/sources.list.d/1password.list"
     
-# 1Password Policies
 mkdir -p /etc/debsig/policies/AC2D62742012EA22/
 wget -qO /etc/debsig/policies/AC2D62742012EA22/1password.pol https://downloads.1password.com/linux/debian/debsig/1password.pol
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
@@ -138,7 +133,7 @@ Pin-Priority: 1000' | tee /etc/apt/preferences.d/mozilla > /dev/null
 # 5. INSTALĀCIJA
 print_step "Programmatūras Instalācija"
 
-log "Atjaunina sarakstus (Pēc labojumiem)..."
+log "Atjaunina sarakstus..."
 apt update
 
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
@@ -325,7 +320,7 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v43 - Repo Rescue).${NC}"
-echo "Repozitoriji: Pilnībā pārinstalēti un iztīrīti."
+echo -e "${GREEN}Sistēma konfigurēta (v44 - Spotify Official).${NC}"
+echo "Spotify: Izmantota oficiālā metode (apt update vajadzētu strādāt)."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
