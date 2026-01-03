@@ -27,39 +27,28 @@ if ! ping -c 1 8.8.8.8 &> /dev/null; then
     exit 1
 fi
 
-# 2. UNIVERSĀLĀ OS DETEKTĒŠANA (LMDE/Mint/Debian/Ubuntu)
+# 2. UNIVERSĀLĀ OS DETEKTĒŠANA
 log "Nosaka operētājsistēmu..."
 source /etc/os-release
 
 TARGET_CODENAME=""
 IS_LMDE=false
 
-# LMDE (Linux Mint Debian Edition)
 if [[ -n "$DEBIAN_CODENAME" ]]; then
-    # LMDE satur DEBIAN_CODENAME mainīgo (piem. bookworm priekš LMDE 6)
     TARGET_CODENAME="$DEBIAN_CODENAME"
     IS_LMDE=true
     log "Sistēma: LMDE (Bāze: $TARGET_CODENAME)"
-
-# Standard Linux Mint
 elif [[ -n "$UBUNTU_CODENAME" ]]; then
-    # Mint satur UBUNTU_CODENAME (piem. jammy priekš Mint 21)
     TARGET_CODENAME="$UBUNTU_CODENAME"
     log "Sistēma: Linux Mint (Bāze: $TARGET_CODENAME)"
-
-# Debian
 elif [[ "$ID" == "debian" ]]; then
     TARGET_CODENAME="$VERSION_CODENAME"
-    [ -z "$TARGET_CODENAME" ] && TARGET_CODENAME="bookworm" # Fallback
+    [ -z "$TARGET_CODENAME" ] && TARGET_CODENAME="bookworm"
     log "Sistēma: Debian ($TARGET_CODENAME)"
-
-# Ubuntu
 elif [[ "$ID" == "ubuntu" ]]; then
     TARGET_CODENAME="$VERSION_CODENAME"
     log "Sistēma: Ubuntu ($TARGET_CODENAME)"
-
 else
-    # Fallback
     TARGET_CODENAME="jammy"
     warn "Nevarēja noteikt OS. Izmanto noklusējumu: $TARGET_CODENAME"
 fi
@@ -68,40 +57,43 @@ fi
 log "Veic sistēmas paš-diagnostiku..."
 dpkg --configure -a || warn "Mēģināja salabot dpkg..."
 apt install -f -y || warn "Mēģināja salabot atkarības..."
-# Pamatrīki
 apt install -y curl wget gpg software-properties-common
 
-# 3. TĪRĪŠANA
-print_step "Tīrīšana"
+# 3. KRITISKĀ TĪRĪŠANA (FIX APT)
+print_step "Kritiskā Tīrīšana"
+
+log "Dzēš bojātos repozitoriju failus..."
+# ŠIS IR KRITISKAIS LABOJUMS:
+rm -f /etc/apt/sources.list.d/signal-desktop.sources
+rm -f /etc/apt/sources.list.d/signal-desktop.list
+# Dzēšam arī citus potenciālos konfliktus
+rm -f /etc/apt/sources.list.d/spotify.list
+rm -f /etc/apt/sources.list.d/mullvad.list
+rm -f /etc/apt/sources.list.d/brave-browser-release.list
+rm -f /etc/apt/sources.list.d/1password.list
 
 # ZRAM TĪRĪŠANA
-log "Noņem ZRAM rīkus (lai netraucētu Zswap)..."
 apt purge -y zram-tools zram-config 2>/dev/null
 rm -f /etc/sysctl.d/7-swappiness.conf
 rm -f /etc/default/zram-tools
-# Noņem vecos pielāgotos failus
 rm -f /etc/sysctl.d/8-writing.conf
 rm -f /etc/default/cpufrequtils
-
-log "Noņem vecos repozitorijus..."
-rm -f /etc/apt/sources.list.d/spotify.list
-rm -f /etc/apt/sources.list.d/librewolf.list 
-rm -f /etc/apt/sources.list.d/eparaksts.list
-rm -f /etc/apt/sources.list.d/signal-desktop.sources
 
 # Noņem dublikātus
 flatpak uninstall -y com.rawtherapee.RawTherapee 2>/dev/null
 flatpak uninstall -y org.signal.Signal 2>/dev/null
 flatpak uninstall -y com.spotify.Client 2>/dev/null
+# Noņem veco Tor Browser
+flatpak uninstall -y com.github.micahflee.torbrowser-launcher 2>/dev/null
 
-# 4. APT REPOZITORIJU PIEVIENOŠANA
+# 4. REPOZITORIJU KONFIGURĀCIJA (CLEAN INSTALL)
 print_step "Repozitoriju Konfigurācija"
 
 add_repo_key() {
     local url=$1
     local path=$2
     log "Atslēga: $(basename "$path")"
-    if curl -fsSL "$url" | gpg --dearmor -o "$path"; then
+    if curl -fsSL "$url" | gpg --dearmor --yes -o "$path"; then
         chmod 644 "$path"
     else
         warn "Neizdevās: $url"
@@ -116,9 +108,9 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] 
 add_repo_key "https://repository.mullvad.net/deb/mullvad-keyring.asc" "/usr/share/keyrings/mullvad-keyring.asc"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.asc] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
 
-# --- Signal (Xenial repo works for all Debian/Ubuntu versions) ---
+# --- Signal (FIXED: Uses .list) ---
 add_repo_key "https://updates.signal.org/desktop/apt/keys.asc" "/usr/share/keyrings/signal-desktop-keyring.gpg"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" > /etc/apt/sources.list.d/signal-desktop.sources
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" > /etc/apt/sources.list.d/signal-desktop.list
 
 # --- Brave ---
 add_repo_key "https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg" "/usr/share/keyrings/brave-browser-archive-keyring.gpg"
@@ -130,30 +122,28 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gp
 mkdir -p /etc/debsig/policies/AC2D62742012EA22/
 curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol > /etc/debsig/policies/AC2D62742012EA22/1password.pol
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
-curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
+curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --yes --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
 
-# 5. INSTALĀCIJA
+# 5. INSTALĀCIJA (RETRY)
 print_step "Programmatūras Instalācija"
 
-log "Atjaunina sarakstus..."
+log "Atjaunina sarakstus (Pēc labojumiem)..."
 apt update
 
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
 apt install -y ttf-mscorefonts-installer
 
-PACKAGES="spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift"
+PACKAGES="spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils"
 log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
 
-# KODEKI (LMDE vs Mint vs Ubuntu vs Debian)
-log "Instalē multimediju kodekus..."
+# KODEKI
+log "Instalē kodekus..."
 if [[ "$ID" == "linuxmint" ]] || [[ "$IS_LMDE" == true ]]; then
-    # LMDE un Mint izmanto 'mint-meta-codecs'
     apt install -y mint-meta-codecs
 elif [[ "$ID" == "ubuntu" ]]; then
     apt install -y ubuntu-restricted-extras
 else
-    # Debian Clean
     apt install -y libavcodec-extra gstreamer1.0-libav gstreamer1.0-plugins-ugly
 fi
 
@@ -171,7 +161,8 @@ install_flatpak() {
 install_flatpak "io.gitlab.librewolf-community"
 install_flatpak "io.ente.auth"
 install_flatpak "org.onlyoffice.desktopeditors"
-install_flatpak "com.github.micahflee.torbrowser-launcher"
+# JAUNAIS TOR BROWSER ID
+install_flatpak "org.torproject.torbrowser-launcher"
 install_flatpak "io.freetubeapp.FreeTube"
 install_flatpak "app.drey.Dialect"
 install_flatpak "org.openshot.OpenShot"
@@ -180,7 +171,7 @@ install_flatpak "com.valvesoftware.Steam"
 install_flatpak "org.inkscape.Inkscape"
 install_flatpak "org.videolan.VLC"
 
-# 7. PYTHON & AI (AMD/NVIDIA Support)
+# 7. PYTHON & AI
 print_step "AI & Tulkošana"
 
 REAL_USER=$(logname)
@@ -247,8 +238,6 @@ if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
     log "Konfigurē GRUB priekš Zswap..."
     sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
     update-grub
-else
-    warn "GRUB fails nav atrasts (vai izmantojat systemd-boot?). Izlaiž GRUB."
 fi
 
 # 3. INITRAMFS
@@ -326,8 +315,8 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v39 - Universal Master).${NC}"
-echo "Atbalsts: LMDE 6/7, Mint 21/22, Ubuntu, Debian."
-echo "Optimizācija: Zswap, CPU Perf, Disk IO."
+echo -e "${GREEN}Sistēma konfigurēta (v41 - Emergency Fix).${NC}"
+echo "Signal: Salabots (Malformācijas novērstas)."
+echo "Tor Browser: Atjaunināts."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
