@@ -46,7 +46,7 @@ rm -f /etc/apt/sources.list.d/signal-desktop.sources
 rm -f /etc/apt/sources.list.d/signal-desktop.list
 rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
 
-# Spotify (tīrīšana - dzēšam visas iepriekšējās versijas)
+# Spotify (TĪRĪŠANA - Lai novērstu apt kļūdas)
 rm -f /etc/apt/sources.list.d/spotify.list
 rm -f /usr/share/keyrings/spotify-client-keyring.gpg
 rm -f /etc/apt/trusted.gpg.d/spotify.gpg
@@ -83,14 +83,6 @@ add_key_and_repo() {
     chmod 644 "$keyring_path"
     echo "$repo_line" > "$list_file"
 }
-
-# --- SPOTIFY (OFFICIAL METHOD) ---
-log "Konfigurē: Spotify (Official)..."
-# 1. Key (from /8, save to trusted.gpg.d)
-curl -sS https://download.spotify.com/debian/pubkey_5384CE82BA52C83A.asc | gpg --dearmor --yes -o /etc/apt/trusted.gpg.d/spotify.gpg
-chmod 644 /etc/apt/trusted.gpg.d/spotify.gpg
-# 2. Repo (from /2)
-echo "deb https://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
 
 # --- Mullvad ---
 wget -qO- https://repository.mullvad.net/deb/mullvad-keyring.asc | gpg --dearmor --yes -o /usr/share/keyrings/mullvad-keyring.gpg
@@ -139,7 +131,7 @@ apt update
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
 apt install -y ttf-mscorefonts-installer
 
-PACKAGES="firefox spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils ufw"
+PACKAGES="firefox signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils ufw"
 log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
 
@@ -320,7 +312,7 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v44 - Spotify Official).${NC}"
-echo "Spotify: Izmantota oficiālā metode (apt update vajadzētu strādāt)."
+echo -e "${GREEN}Sistēma konfigurēta (v45 - No-Spotify).${NC}"
+echo "Spotify: Atinstalēts un iztīrīts (lai netraucētu sistēmai)."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
