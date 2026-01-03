@@ -41,7 +41,6 @@ fi
 
 # 3. AGRESĪVĀ TĪRĪŠANA
 print_step "Tīrīšana"
-
 log "Dzēš vecos un konfliktējošos failus..."
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
 rm -f /etc/apt/sources.list.d/signal-desktop.list
@@ -53,8 +52,6 @@ rm -f /etc/apt/sources.list.d/mullvad.list
 rm -f /etc/apt/sources.list.d/brave-browser-release.list
 rm -f /etc/apt/sources.list.d/1password.list
 rm -f /usr/share/keyrings/mullvad-keyring.gpg
-
-# ZRAM
 apt purge -y zram-tools zram-config 2>/dev/null
 rm -f /etc/sysctl.d/7-swappiness.conf
 rm -f /etc/default/zram-tools
@@ -277,14 +274,13 @@ EOF
 apt install -y papirus-icon-theme fonts-noto-color-emoji
 update-icon-caches /usr/share/icons/* 2>/dev/null
 
-# --- FLOATING MENU & CINNAMENU INSTALĀCIJA ---
+# --- FLOATING MENU & CINNAMENU ---
 if [ -f "/usr/bin/cinnamon-session" ]; then
-    log "Konfigurē Cinnamon (Windows 11 Floating Style)..."
+    log "Konfigurē Cinnamon (Win11 Glass & Float)..."
     
-    # 1. Instalē Cinnamenu (Win11 style grid menu)
+    # 1. Instalē Cinnamenu
     APPLETS_DIR="$USER_HOME/.local/share/cinnamon/applets"
     mkdir -p "$APPLETS_DIR"
-    
     if [ ! -d "$APPLETS_DIR/Cinnamenu@json" ]; then
         log "Lejupielādē Cinnamenu..."
         wget -O "$USER_HOME/cinnamenu.zip" https://cinnamon-spices.linuxmint.com/files/applets/Cinnamenu@json.zip
@@ -293,52 +289,50 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
         chown -R "$REAL_USER:$REAL_USER" "$APPLETS_DIR/Cinnamenu@json"
     fi
 
-    # 2. Izveido Floating CSS Tēmu
-    THEMES_DIR="$USER_HOME/.themes"
-    mkdir -p "$THEMES_DIR"
-    FLOAT_THEME_DIR="$THEMES_DIR/Mint-Y-Win11-Float"
+    # 2. Native CSS Edit (Mint-Y-Dark-Aqua)
+    THEME_CSS="/usr/share/themes/Mint-Y-Dark-Aqua/cinnamon/cinnamon.css"
     
-    # Kopējam esošo Mint-Y-Dark-Aqua
-    if [ -d "/usr/share/themes/Mint-Y-Dark-Aqua" ]; then
-        cp -r "/usr/share/themes/Mint-Y-Dark-Aqua" "$FLOAT_THEME_DIR"
-        
-        # Pievienojam CSS maģiju (Floating effect)
-        CSS_FILE="$FLOAT_THEME_DIR/cinnamon/cinnamon.css"
+    if [ -f "$THEME_CSS" ]; then
+        # Ja CSS hack jau eksistē, mēs to vispirms neaiztiekam, bet pieliekam galā jaunu
+        # (CSS hierarhijā pēdējais uzvar, tāpēc vienkārši pieliekam jaunos stilus apakšā)
+        log "Pievieno Floating Glass efektu..."
         echo "
-/* Windows 11 Floating Menu Hack */
+/* Windows 11 Glass & Float Hack v2 */
 .menu {
-  margin-bottom: 12px;
-  border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+  margin-bottom: 12px !important;
+  border-radius: 12px !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+  background-color: rgba(30, 30, 30, 0.85) !important;
 }
-" >> "$CSS_FILE"
-        
-        chown -R "$REAL_USER:$REAL_USER" "$THEMES_DIR"
+
+/* Paslēpt bultiņu (Arrow), lai izskatītos, ka tiešām peld */
+.menu-arrow {
+  border: none !important;
+  background-color: transparent !important;
+  width: 0px !important;
+  height: 0px !important;
+}
+" >> "$THEME_CSS"
+    else
+        warn "Tēmas fails $THEME_CSS nav atrasts!"
     fi
 
     # 3. Aktivizē Iestatījumus
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null
+    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Dark-Aqua' 2>/dev/null
     
-    # Aktivizējam jauno tēmu
-    if [ -d "$FLOAT_THEME_DIR" ]; then
-        sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Win11-Float' 2>/dev/null
-    fi
-    
-    # Paneļa izmēri (48px)
+    # Paneļa izmēri
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panels-height "['1:48']" 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panel-zone-icon-sizes '[{"panelId": 1, "left": 0, "center": 32, "right": 22}]' 2>/dev/null
     
-    # Ieslēdzam Cinnamenu (Menu vietā)
-    # Piezīme: Tas aizstāj default menu. ID 'Cinnamenu@json'
+    # Ieslēdzam Cinnamenu
     WIN11_LAYOUT="['panel1:center:0:Cinnamenu@json', 'panel1:center:1:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:network@cinnamon.org', 'panel1:right:7:sound@cinnamon.org', 'panel1:right:8:power@cinnamon.org', 'panel1:right:9:calendar@cinnamon.org', 'panel1:right:10:cornerbar@cinnamon.org']"
-    
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enabled-applets "$WIN11_LAYOUT" 2>/dev/null
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v47 - Win11 Floating).${NC}"
-echo "Start Menu: Cinnamenu (Grid capable) + Floating Effect."
-echo "UI: Panelis 48px, Ikonas 32px/22px."
+echo -e "${GREEN}Sistēma konfigurēta (v49 - Glass Float).${NC}"
+echo "UI: Caurspīdīga (0.85) un pilnībā atdalīta (bez bultiņas) izvēlne."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
