@@ -41,12 +41,12 @@ print_step "Tīrīšana"
 
 log "Dzēš vecos un konfliktējošos failus..."
 
-# Signal (tīrīšana)
+# Signal
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
 rm -f /etc/apt/sources.list.d/signal-desktop.list
 rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
 
-# Spotify (TĪRĪŠANA - Lai novērstu apt kļūdas)
+# Spotify (Noņemts)
 rm -f /etc/apt/sources.list.d/spotify.list
 rm -f /usr/share/keyrings/spotify-client-keyring.gpg
 rm -f /etc/apt/trusted.gpg.d/spotify.gpg
@@ -298,21 +298,34 @@ EOF
 apt install -y papirus-icon-theme fonts-noto-color-emoji
 update-icon-caches /usr/share/icons/* 2>/dev/null
 
-# UI: VIZUĀLO EFEKTU ATSLĒGŠANA
+# UI: VIZUĀLO EFEKTU ATSLĒGŠANA + WIN11 PRECISION
 if [ -f "/usr/bin/cinnamon-session" ]; then
-    log "Konfigurē Cinnamon (Windows 11 Style)..."
+    log "Konfigurē Cinnamon (Windows 11 Precision Style)..."
+    
+    # Animācijas & Tiling
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface enable-animations false 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enable-tiling false 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.muffin unredirect-fullscreen-windows true 2>/dev/null
+    
+    # Tēma
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Dark-Aqua' 2>/dev/null
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panels-height "['1:60']" 2>/dev/null
+    
+    # PANEĻA IZMĒRI (Win11 Standarti)
+    # Augstums: 48px
+    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panels-height "['1:48']" 2>/dev/null
+    
+    # Ikonu izmēri (Center: 32px, Right: 22px, Left: 0px)
+    sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panel-zone-icon-sizes '[{"panelId": 1, "left": 0, "center": 32, "right": 22}]' 2>/dev/null
+    
+    # Izkārtojums
     WIN11_LAYOUT="['panel1:center:0:menu@cinnamon.org', 'panel1:center:1:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:network@cinnamon.org', 'panel1:right:7:sound@cinnamon.org', 'panel1:right:8:power@cinnamon.org', 'panel1:right:9:calendar@cinnamon.org', 'panel1:right:10:cornerbar@cinnamon.org']"
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enabled-applets "$WIN11_LAYOUT" 2>/dev/null
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v45 - No-Spotify).${NC}"
-echo "Spotify: Atinstalēts un iztīrīts (lai netraucētu sistēmai)."
+echo -e "${GREEN}Sistēma konfigurēta (v46 - Win11 Precision).${NC}"
+echo "UI: Panelis 48px, Ikonas 32px/22px."
+echo "Clean: Spotify un Signal konflikti novērsti."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
