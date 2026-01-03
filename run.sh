@@ -59,14 +59,14 @@ dpkg --configure -a || warn "Mēģināja salabot dpkg..."
 apt install -f -y || warn "Mēģināja salabot atkarības..."
 apt install -y curl wget gpg software-properties-common
 
-# 3. KRITISKĀ TĪRĪŠANA (FIX APT)
-print_step "Kritiskā Tīrīšana"
+# 3. DROŠĪBAS TĪRĪŠANA (REMOVE UNSAFE APPS)
+print_step "Drošības Tīrīšana"
 
-log "Dzēš bojātos repozitoriju failus..."
-# ŠIS IR KRITISKAIS LABOJUMS:
+log "Noņem nedrošās/nevajadzīgās pakotnes (Java, Mono, Wine, mlocate)..."
+apt purge -y "openjdk*" "wine*" "mono*" mlocate locate 2>/dev/null
+
+# Dzēšam bojātos failus
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
-rm -f /etc/apt/sources.list.d/signal-desktop.list
-# Dzēšam arī citus potenciālos konfliktus
 rm -f /etc/apt/sources.list.d/spotify.list
 rm -f /etc/apt/sources.list.d/mullvad.list
 rm -f /etc/apt/sources.list.d/brave-browser-release.list
@@ -83,10 +83,9 @@ rm -f /etc/default/cpufrequtils
 flatpak uninstall -y com.rawtherapee.RawTherapee 2>/dev/null
 flatpak uninstall -y org.signal.Signal 2>/dev/null
 flatpak uninstall -y com.spotify.Client 2>/dev/null
-# Noņem veco Tor Browser
 flatpak uninstall -y com.github.micahflee.torbrowser-launcher 2>/dev/null
 
-# 4. REPOZITORIJU KONFIGURĀCIJA (CLEAN INSTALL)
+# 4. REPOZITORIJU KONFIGURĀCIJA
 print_step "Repozitoriju Konfigurācija"
 
 add_repo_key() {
@@ -100,6 +99,15 @@ add_repo_key() {
     fi
 }
 
+# --- Mozilla Firefox (OFFICIAL UPSTREAM) ---
+log "Konfigurē Mozilla Firefox Official Repo..."
+wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" | tee /etc/apt/sources.list.d/mozilla.list > /dev/null
+# Priority Pinning (Mozilla > Mint)
+echo 'Package: *
+Pin: origin packages.mozilla.org
+Pin-Priority: 1000' | tee /etc/apt/preferences.d/mozilla > /dev/null
+
 # --- Spotify ---
 add_repo_key "https://download.spotify.com/debian/pubkey_6224F9941A8AA6D1.gpg" "/usr/share/keyrings/spotify-client-keyring.gpg"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
@@ -108,7 +116,7 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] 
 add_repo_key "https://repository.mullvad.net/deb/mullvad-keyring.asc" "/usr/share/keyrings/mullvad-keyring.asc"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.asc] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
 
-# --- Signal (FIXED: Uses .list) ---
+# --- Signal ---
 add_repo_key "https://updates.signal.org/desktop/apt/keys.asc" "/usr/share/keyrings/signal-desktop-keyring.gpg"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" > /etc/apt/sources.list.d/signal-desktop.list
 
@@ -124,16 +132,17 @@ curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol > /et
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
 curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --yes --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
 
-# 5. INSTALĀCIJA (RETRY)
+# 5. INSTALĀCIJA
 print_step "Programmatūras Instalācija"
 
-log "Atjaunina sarakstus (Pēc labojumiem)..."
+log "Atjaunina sarakstus..."
 apt update
 
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
 apt install -y ttf-mscorefonts-installer
 
-PACKAGES="spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils"
+# Instalē Firefox no Mozilla repo (pateicoties Pinning)
+PACKAGES="firefox spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils ufw"
 log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
 
@@ -161,7 +170,6 @@ install_flatpak() {
 install_flatpak "io.gitlab.librewolf-community"
 install_flatpak "io.ente.auth"
 install_flatpak "org.onlyoffice.desktopeditors"
-# JAUNAIS TOR BROWSER ID
 install_flatpak "org.torproject.torbrowser-launcher"
 install_flatpak "io.freetubeapp.FreeTube"
 install_flatpak "app.drey.Dialect"
@@ -212,15 +220,24 @@ EOF
 chmod +x "$KOBOLD_DIR/start_kobold.sh"
 chown -R "$REAL_USER:$REAL_USER" "$KOBOLD_DIR"
 
-# 8. OPTIMIZĀCIJA (ZSWAP AUTOMATIZĀCIJA)
-print_step "Zswap & Kodola Konfigurācija"
+# 8. DROŠĪBAS & KODOLA HARDENING
+print_step "Drošības Hardening"
 
+# UFW (Firewall)
+log "Konfigurē UFW Ugunsmūri..."
+ufw enable
+ufw logging off
+
+# Kernel Hardening (Restrict dmesg)
+log "Ierobežo pieeju kodola logiem (dmesg)..."
+echo "kernel.dmesg_restrict=1" > /etc/sysctl.d/6-dmesg-sudo.conf
+sysctl -p /etc/sysctl.d/6-dmesg-sudo.conf 2>/dev/null
+
+# Zswap & Swappiness
 # Aprēķina RAM
 TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
 TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
-log "Kopējais RAM: ${TOTAL_RAM_GB} GB"
 
-# 1. SWAPPINESS
 if [ "$TOTAL_RAM_GB" -le 8 ]; then
     SWAPPINESS_VAL=30
     GRUB_ADD="zswap.enabled=1 zswap.max_pool_percent=40 zswap.zpool=zsmalloc zswap.compressor=lz4"
@@ -232,18 +249,17 @@ fi
 echo "vm.swappiness=$SWAPPINESS_VAL" > /etc/sysctl.d/99-mint-swappiness.conf
 sysctl -p /etc/sysctl.d/99-mint-swappiness.conf
 
-# 2. GRUB ATJAUNINĀŠANA
+# GRUB Update
 GRUB_FILE="/etc/default/grub"
 if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
-    log "Konfigurē GRUB priekš Zswap..."
+    log "Atjaunina GRUB..."
     sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
     update-grub
 fi
 
-# 3. INITRAMFS
+# Initramfs Update
 MODULES_FILE="/etc/initramfs-tools/modules"
 if [ -f "$MODULES_FILE" ] && ! grep -q "zsmalloc" "$MODULES_FILE"; then
-    log "Pievieno zsmalloc moduli..."
     echo "zsmalloc" >> "$MODULES_FILE"
     update-initramfs -uk all
 fi
@@ -252,7 +268,6 @@ fi
 print_step "CPU & Diska Optimizācija"
 
 # CPU Performance
-apt install -y cpufrequtils
 echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
 systemctl restart cpufrequtils 2>/dev/null
 
@@ -275,7 +290,7 @@ sed -i "s/#DNS=/DNS=9.9.9.9 149.112.112.112/" /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
-# Browser Policies (SSD Saver + No-AI + 1GB Cache)
+# Browser Policies (SSD Saver + No-AI + 1GB Cache + WebPush Disable)
 mkdir -p /etc/firefox/policies /usr/lib/firefox/distribution
 cat <<EOF > /etc/firefox/policies/policies.json
 {
@@ -289,6 +304,7 @@ cat <<EOF > /etc/firefox/policies/policies.json
       "browser.sessionstore.interval": 150000000,
       "browser.ml.enable": false,
       "browser.ml.chat.enabled": false,
+      "dom.webnotifications.enabled": false,
       "browser.quicksuggest.enabled": false,
       "browser.urlbar.suggest.quicksuggest.nonsponsored": false,
       "browser.urlbar.suggest.quicksuggest.sponsored": false
@@ -315,8 +331,8 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v41 - Emergency Fix).${NC}"
-echo "Signal: Salabots (Malformācijas novērstas)."
-echo "Tor Browser: Atjaunināts."
+echo -e "${GREEN}Sistēma konfigurēta (v42 - Security Hardened).${NC}"
+echo "Drošība: UFW, Kernel Hardening, Clean Apps."
+echo "Firefox: Official Mozilla (No WebPush, No AI)."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
