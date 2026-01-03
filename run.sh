@@ -14,7 +14,7 @@ warn() { echo -e "${YELLOW}[UZMANĪBU]${NC} $1"; }
 error() { echo -e "${RED}[KĻŪDA]${NC} $1"; }
 
 # 1. PIRMS-STARTA PĀRBAUDES
-print_step "Sistēmas Pārbaude"
+print_step "Sistēmas Diagnostika"
 
 if [ "$EUID" -ne 0 ]; then
     error "Nepieciešamas root tiesības. Palaidiet: sudo ./run.sh"
@@ -27,26 +27,55 @@ if ! ping -c 1 8.8.8.8 &> /dev/null; then
     exit 1
 fi
 
-REAL_USER=$(logname)
-USER_HOME=$(eval echo "~$REAL_USER")
+# 2. UNIVERSĀLĀ OS DETEKTĒŠANA (LMDE/Mint/Debian/Ubuntu)
+log "Nosaka operētājsistēmu..."
 source /etc/os-release
 
-DISTRO_CODE="jammy" 
-if [[ "$ID" == "lmde" ]]; then
-    DISTRO_CODE="bookworm"
+TARGET_CODENAME=""
+IS_LMDE=false
+
+# LMDE (Linux Mint Debian Edition)
+if [[ -n "$DEBIAN_CODENAME" ]]; then
+    # LMDE satur DEBIAN_CODENAME mainīgo (piem. bookworm priekš LMDE 6)
+    TARGET_CODENAME="$DEBIAN_CODENAME"
+    IS_LMDE=true
+    log "Sistēma: LMDE (Bāze: $TARGET_CODENAME)"
+
+# Standard Linux Mint
+elif [[ -n "$UBUNTU_CODENAME" ]]; then
+    # Mint satur UBUNTU_CODENAME (piem. jammy priekš Mint 21)
+    TARGET_CODENAME="$UBUNTU_CODENAME"
+    log "Sistēma: Linux Mint (Bāze: $TARGET_CODENAME)"
+
+# Debian
+elif [[ "$ID" == "debian" ]]; then
+    TARGET_CODENAME="$VERSION_CODENAME"
+    [ -z "$TARGET_CODENAME" ] && TARGET_CODENAME="bookworm" # Fallback
+    log "Sistēma: Debian ($TARGET_CODENAME)"
+
+# Ubuntu
+elif [[ "$ID" == "ubuntu" ]]; then
+    TARGET_CODENAME="$VERSION_CODENAME"
+    log "Sistēma: Ubuntu ($TARGET_CODENAME)"
+
+else
+    # Fallback
+    TARGET_CODENAME="jammy"
+    warn "Nevarēja noteikt OS. Izmanto noklusējumu: $TARGET_CODENAME"
 fi
-log "Detektētā bāze: $ID ($DISTRO_CODE)"
 
 # Self-Repair
 log "Veic sistēmas paš-diagnostiku..."
 dpkg --configure -a || warn "Mēģināja salabot dpkg..."
 apt install -f -y || warn "Mēģināja salabot atkarības..."
+# Pamatrīki
+apt install -y curl wget gpg software-properties-common
 
-# 2. TĪRĪŠANA
+# 3. TĪRĪŠANA
 print_step "Tīrīšana"
 
-# ZRAM TĪRĪŠANA (Obligāti pirms Zswap)
-log "Noņem ZRAM rīkus (konfliktu novēršana)..."
+# ZRAM TĪRĪŠANA
+log "Noņem ZRAM rīkus (lai netraucētu Zswap)..."
 apt purge -y zram-tools zram-config 2>/dev/null
 rm -f /etc/sysctl.d/7-swappiness.conf
 rm -f /etc/default/zram-tools
@@ -65,7 +94,7 @@ flatpak uninstall -y com.rawtherapee.RawTherapee 2>/dev/null
 flatpak uninstall -y org.signal.Signal 2>/dev/null
 flatpak uninstall -y com.spotify.Client 2>/dev/null
 
-# 3. APT REPOZITORIJU PIEVIENOŠANA
+# 4. APT REPOZITORIJU PIEVIENOŠANA
 print_step "Repozitoriju Konfigurācija"
 
 add_repo_key() {
@@ -87,7 +116,7 @@ echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] 
 add_repo_key "https://repository.mullvad.net/deb/mullvad-keyring.asc" "/usr/share/keyrings/mullvad-keyring.asc"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.asc] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
 
-# --- Signal ---
+# --- Signal (Xenial repo works for all Debian/Ubuntu versions) ---
 add_repo_key "https://updates.signal.org/desktop/apt/keys.asc" "/usr/share/keyrings/signal-desktop-keyring.gpg"
 echo "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" > /etc/apt/sources.list.d/signal-desktop.sources
 
@@ -103,7 +132,7 @@ curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol > /et
 mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
 curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
 
-# 4. INSTALĀCIJA
+# 5. INSTALĀCIJA
 print_step "Programmatūras Instalācija"
 
 log "Atjaunina sarakstus..."
@@ -112,20 +141,23 @@ apt update
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
 apt install -y ttf-mscorefonts-installer
 
-PACKAGES="spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils picom picom-conf"
-log "Instalē: $PACKAGES"
+PACKAGES="spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift"
+log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
 
-# Noņem Compiz
-apt purge -y compiz-core 2>/dev/null
-
-if [ "$ID" == "lmde" ]; then
-    apt install -y libavcodec-extra gstreamer1.0-libav gstreamer1.0-plugins-ugly
-else
+# KODEKI (LMDE vs Mint vs Ubuntu vs Debian)
+log "Instalē multimediju kodekus..."
+if [[ "$ID" == "linuxmint" ]] || [[ "$IS_LMDE" == true ]]; then
+    # LMDE un Mint izmanto 'mint-meta-codecs'
     apt install -y mint-meta-codecs
+elif [[ "$ID" == "ubuntu" ]]; then
+    apt install -y ubuntu-restricted-extras
+else
+    # Debian Clean
+    apt install -y libavcodec-extra gstreamer1.0-libav gstreamer1.0-plugins-ugly
 fi
 
-# 5. FLATPAK
+# 6. FLATPAK
 print_step "Flatpak Konfigurācija"
 flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
 flatpak config --set languages "lv;en"
@@ -148,8 +180,11 @@ install_flatpak "com.valvesoftware.Steam"
 install_flatpak "org.inkscape.Inkscape"
 install_flatpak "org.videolan.VLC"
 
-# 6. PYTHON & AI
+# 7. PYTHON & AI (AMD/NVIDIA Support)
 print_step "AI & Tulkošana"
+
+REAL_USER=$(logname)
+USER_HOME=$(eval echo "~$REAL_USER")
 
 sudo -u "$REAL_USER" pipx install libretranslate --force
 sudo -u "$REAL_USER" pipx ensurepath
@@ -168,7 +203,7 @@ if [ ! -f "$KOBOLD_DIR/llama-3-8b-instruct.gguf" ]; then
     wget -O "$KOBOLD_DIR/llama-3-8b-instruct.gguf" https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf
 fi
 
-# SMART LAUNCHER (AMD/NVIDIA/CPU)
+# SMART LAUNCHER
 cat <<EOF > "$KOBOLD_DIR/start_kobold.sh"
 #!/bin/bash
 cd $KOBOLD_DIR
@@ -186,7 +221,7 @@ EOF
 chmod +x "$KOBOLD_DIR/start_kobold.sh"
 chown -R "$REAL_USER:$REAL_USER" "$KOBOLD_DIR"
 
-# 7. OPTIMIZĀCIJA (ZSWAP AUTOMATIZĀCIJA)
+# 8. OPTIMIZĀCIJA (ZSWAP AUTOMATIZĀCIJA)
 print_step "Zswap & Kodola Konfigurācija"
 
 # Aprēķina RAM
@@ -205,38 +240,30 @@ fi
 
 echo "vm.swappiness=$SWAPPINESS_VAL" > /etc/sysctl.d/99-mint-swappiness.conf
 sysctl -p /etc/sysctl.d/99-mint-swappiness.conf
-log "Swappiness iestatīts uz $SWAPPINESS_VAL"
 
 # 2. GRUB ATJAUNINĀŠANA
 GRUB_FILE="/etc/default/grub"
-# Mēs aizvietojam 'quiet splash' ar mūsu parametriem, lai nerastos dublikāti
 if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
     log "Konfigurē GRUB priekš Zswap..."
-    # Izmanto drošu sed komandu, kas aizvieto visu rindu
     sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
-    
-    log "Ģenerē jaunu GRUB konfigurāciju..."
     update-grub
 else
-    warn "GRUB fails nav atrasts!"
+    warn "GRUB fails nav atrasts (vai izmantojat systemd-boot?). Izlaiž GRUB."
 fi
 
-# 3. INITRAMFS (zsmalloc modulis)
+# 3. INITRAMFS
 MODULES_FILE="/etc/initramfs-tools/modules"
-if ! grep -q "zsmalloc" "$MODULES_FILE"; then
-    log "Pievieno zsmalloc moduli kodolam..."
+if [ -f "$MODULES_FILE" ] && ! grep -q "zsmalloc" "$MODULES_FILE"; then
+    log "Pievieno zsmalloc moduli..."
     echo "zsmalloc" >> "$MODULES_FILE"
-    
-    log "Atjaunina initramfs (tas var aizņemt laiku)..."
     update-initramfs -uk all
-else
-    log "zsmalloc jau ir konfigurēts."
 fi
 
-# 8. DISK & CPU
+# 9. DISK & CPU
 print_step "CPU & Diska Optimizācija"
 
 # CPU Performance
+apt install -y cpufrequtils
 echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
 systemctl restart cpufrequtils 2>/dev/null
 
@@ -250,7 +277,7 @@ else
 fi
 sysctl -p /etc/sysctl.d/8-writing.conf
 
-# 9. PĀRLŪKU & UI IESTATĪJUMI
+# 10. PĀRLŪKU & UI IESTATĪJUMI
 print_step "UI & Privātums"
 
 # DNS
@@ -259,7 +286,7 @@ sed -i "s/#DNS=/DNS=9.9.9.9 149.112.112.112/" /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
-# Browser Policies
+# Browser Policies (SSD Saver + No-AI + 1GB Cache)
 mkdir -p /etc/firefox/policies /usr/lib/firefox/distribution
 cat <<EOF > /etc/firefox/policies/policies.json
 {
@@ -287,26 +314,20 @@ update-icon-caches /usr/share/icons/* 2>/dev/null
 
 # UI: VIZUĀLO EFEKTU ATSLĒGŠANA
 if [ -f "/usr/bin/cinnamon-session" ]; then
-    log "Konfigurē Cinnamon (Windows 11 Style + No Effects)..."
+    log "Konfigurē Cinnamon (Windows 11 Style)..."
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface enable-animations false 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enable-tiling false 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.muffin unredirect-fullscreen-windows true 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.desktop.interface icon-theme 'Papirus-Dark' 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon.theme-name 'Mint-Y-Dark-Aqua' 2>/dev/null
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon panels-height "['1:60']" 2>/dev/null
-    
     WIN11_LAYOUT="['panel1:center:0:menu@cinnamon.org', 'panel1:center:1:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:network@cinnamon.org', 'panel1:right:7:sound@cinnamon.org', 'panel1:right:8:power@cinnamon.org', 'panel1:right:9:calendar@cinnamon.org', 'panel1:right:10:cornerbar@cinnamon.org']"
     sudo -u "$REAL_USER" dbus-launch gsettings set org.cinnamon enabled-applets "$WIN11_LAYOUT" 2>/dev/null
-
-elif [ -f "/usr/bin/mate-session" ]; then
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.mate.interface enable-animations false 2>/dev/null
-    sudo -u "$REAL_USER" dbus-launch gsettings set org.mate.Marco.general allow-tiling false 2>/dev/null
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v37 - Zswap Native).${NC}"
-echo "Zswap: Konfigurēts (GRUB atjaunināts)."
-echo "Initramfs: Atjaunināts (zsmalloc)."
-echo "ZRAM: Noņemts."
-echo -e "${YELLOW}Lai Zswap aktivizētos, OBLIGĀTI PĀRSTARTĒJIET DATORU!${NC}"
+echo -e "${GREEN}Sistēma konfigurēta (v39 - Universal Master).${NC}"
+echo "Atbalsts: LMDE 6/7, Mint 21/22, Ubuntu, Debian."
+echo "Optimizācija: Zswap, CPU Perf, Disk IO."
+echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
