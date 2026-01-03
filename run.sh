@@ -27,121 +27,123 @@ if ! ping -c 1 8.8.8.8 &> /dev/null; then
     exit 1
 fi
 
-# 2. UNIVERSĀLĀ OS DETEKTĒŠANA
-log "Nosaka operētājsistēmu..."
+# 2. OS DETEKTĒŠANA
 source /etc/os-release
-
-TARGET_CODENAME=""
-IS_LMDE=false
-
 if [[ -n "$DEBIAN_CODENAME" ]]; then
-    TARGET_CODENAME="$DEBIAN_CODENAME"
     IS_LMDE=true
-    log "Sistēma: LMDE (Bāze: $TARGET_CODENAME)"
-elif [[ -n "$UBUNTU_CODENAME" ]]; then
-    TARGET_CODENAME="$UBUNTU_CODENAME"
-    log "Sistēma: Linux Mint (Bāze: $TARGET_CODENAME)"
-elif [[ "$ID" == "debian" ]]; then
-    TARGET_CODENAME="$VERSION_CODENAME"
-    [ -z "$TARGET_CODENAME" ] && TARGET_CODENAME="bookworm"
-    log "Sistēma: Debian ($TARGET_CODENAME)"
-elif [[ "$ID" == "ubuntu" ]]; then
-    TARGET_CODENAME="$VERSION_CODENAME"
-    log "Sistēma: Ubuntu ($TARGET_CODENAME)"
+    log "Sistēma: LMDE ($DEBIAN_CODENAME)"
 else
-    TARGET_CODENAME="jammy"
-    warn "Nevarēja noteikt OS. Izmanto noklusējumu: $TARGET_CODENAME"
+    log "Sistēma: $NAME ($VERSION_CODENAME)"
 fi
 
-# Self-Repair
-log "Veic sistēmas paš-diagnostiku..."
-dpkg --configure -a || warn "Mēģināja salabot dpkg..."
-apt install -f -y || warn "Mēģināja salabot atkarības..."
-apt install -y curl wget gpg software-properties-common
+# 3. AGRESĪVĀ TĪRĪŠANA (REPOZITORIJI)
+print_step "Bojāto Repozitoriju Dzēšana"
 
-# 3. DROŠĪBAS TĪRĪŠANA (REMOVE UNSAFE APPS)
-print_step "Drošības Tīrīšana"
+log "Dzēš visu, kas varētu izraisīt konfliktus..."
 
-log "Noņem nedrošās/nevajadzīgās pakotnes (Java, Mono, Wine, mlocate)..."
-apt purge -y "openjdk*" "wine*" "mono*" mlocate locate 2>/dev/null
-
-# Dzēšam bojātos failus
+# 1. Signal (Galvenais vaininieks 'Malformed stanza')
 rm -f /etc/apt/sources.list.d/signal-desktop.sources
+rm -f /etc/apt/sources.list.d/signal-desktop.list
+rm -f /etc/apt/sources.list.d/*signal*.list
+rm -f /etc/apt/sources.list.d/*signal*.sources
+
+# 2. Spotify (NO_PUBKEY fix)
 rm -f /etc/apt/sources.list.d/spotify.list
+rm -f /etc/apt/sources.list.d/*spotify*.list
+
+# 3. Mullvad (NO_PUBKEY fix)
 rm -f /etc/apt/sources.list.d/mullvad.list
+
+# 4. Citi
 rm -f /etc/apt/sources.list.d/brave-browser-release.list
 rm -f /etc/apt/sources.list.d/1password.list
 
-# ZRAM TĪRĪŠANA
-apt purge -y zram-tools zram-config 2>/dev/null
-rm -f /etc/sysctl.d/7-swappiness.conf
-rm -f /etc/default/zram-tools
-rm -f /etc/sysctl.d/8-writing.conf
-rm -f /etc/default/cpufrequtils
+# Dzēšam vecās atslēgas, lai lejupielādētu svaigas
+rm -f /usr/share/keyrings/signal-desktop-keyring.gpg
+rm -f /usr/share/keyrings/spotify-client-keyring.gpg
+rm -f /usr/share/keyrings/mullvad-keyring.asc
+rm -f /usr/share/keyrings/mullvad-keyring.gpg
 
-# Noņem dublikātus
-flatpak uninstall -y com.rawtherapee.RawTherapee 2>/dev/null
-flatpak uninstall -y org.signal.Signal 2>/dev/null
-flatpak uninstall -y com.spotify.Client 2>/dev/null
-flatpak uninstall -y com.github.micahflee.torbrowser-launcher 2>/dev/null
+# Self-Repair (Pēc failu dzēšanas)
+log "Mēģina salabot apt..."
+apt clean
+apt install -f -y
+apt install -y curl wget gpg software-properties-common
 
-# 4. REPOZITORIJU KONFIGURĀCIJA
-print_step "Repozitoriju Konfigurācija"
+# 4. REPOZITORIJU KONFIGURĀCIJA (CLEAN INSTALL)
+print_step "Repozitoriju Atjaunošana"
 
-add_repo_key() {
-    local url=$1
-    local path=$2
-    log "Atslēga: $(basename "$path")"
-    if curl -fsSL "$url" | gpg --dearmor --yes -o "$path"; then
-        chmod 644 "$path"
-    else
-        warn "Neizdevās: $url"
-    fi
+# Funkcija drošai atslēgu pievienošanai
+add_key_and_repo() {
+    local key_url=$1
+    local keyring_path=$2
+    local repo_line=$3
+    local list_file=$4
+
+    log "Konfigurē: $(basename "$list_file")"
+    
+    # Lejupielādē atslēgu (wget -> gpg dearmor)
+    wget -qO- "$key_url" | gpg --dearmor --yes -o "$keyring_path"
+    chmod 644 "$keyring_path"
+    
+    # Izveido repo failu
+    echo "$repo_line" > "$list_file"
 }
 
-# --- Mozilla Firefox (OFFICIAL UPSTREAM) ---
-log "Konfigurē Mozilla Firefox Official Repo..."
-wget -q https://packages.mozilla.org/apt/repo-signing-key.gpg -O- | tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
+# --- Spotify ---
+# Izmantojam oficiālo metodi
+wget -qO- "http://keyserver.ubuntu.com/pks/lookup?op=get&search=0x6224F9941A8AA6D1" | gpg --dearmor --yes -o /usr/share/keyrings/spotify-client-keyring.gpg
+chmod 644 /usr/share/keyrings/spotify-client-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
+
+# --- Mullvad ---
+wget -qO- https://repository.mullvad.net/deb/mullvad-keyring.asc | gpg --dearmor --yes -o /usr/share/keyrings/mullvad-keyring.gpg
+chmod 644 /usr/share/keyrings/mullvad-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.gpg] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
+
+# --- Signal (Xenial repo works for all) ---
+add_key_and_repo \
+    "https://updates.signal.org/desktop/apt/keys.asc" \
+    "/usr/share/keyrings/signal-desktop-keyring.gpg" \
+    "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" \
+    "/etc/apt/sources.list.d/signal-desktop.list"
+
+# --- Brave ---
+add_key_and_repo \
+    "https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg" \
+    "/usr/share/keyrings/brave-browser-archive-keyring.gpg" \
+    "deb [arch=amd64 signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" \
+    "/etc/apt/sources.list.d/brave-browser-release.list"
+
+# --- 1Password ---
+add_key_and_repo \
+    "https://downloads.1password.com/linux/keys/1password.asc" \
+    "/usr/share/keyrings/1password-archive-keyring.gpg" \
+    "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main" \
+    "/etc/apt/sources.list.d/1password.list"
+    
+# 1Password Policies
+mkdir -p /etc/debsig/policies/AC2D62742012EA22/
+wget -qO /etc/debsig/policies/AC2D62742012EA22/1password.pol https://downloads.1password.com/linux/debian/debsig/1password.pol
+mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
+wget -qO- https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --yes -o /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
+
+# --- Mozilla Firefox Official ---
+wget -qO- https://packages.mozilla.org/apt/repo-signing-key.gpg | tee /etc/apt/keyrings/packages.mozilla.org.asc > /dev/null
 echo "deb [signed-by=/etc/apt/keyrings/packages.mozilla.org.asc] https://packages.mozilla.org/apt mozilla main" | tee /etc/apt/sources.list.d/mozilla.list > /dev/null
-# Priority Pinning (Mozilla > Mint)
 echo 'Package: *
 Pin: origin packages.mozilla.org
 Pin-Priority: 1000' | tee /etc/apt/preferences.d/mozilla > /dev/null
 
-# --- Spotify ---
-add_repo_key "https://download.spotify.com/debian/pubkey_6224F9941A8AA6D1.gpg" "/usr/share/keyrings/spotify-client-keyring.gpg"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/spotify-client-keyring.gpg] http://repository.spotify.com stable non-free" > /etc/apt/sources.list.d/spotify.list
-
-# --- Mullvad ---
-add_repo_key "https://repository.mullvad.net/deb/mullvad-keyring.asc" "/usr/share/keyrings/mullvad-keyring.asc"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/mullvad-keyring.asc] https://repository.mullvad.net/deb/stable stable main" > /etc/apt/sources.list.d/mullvad.list
-
-# --- Signal ---
-add_repo_key "https://updates.signal.org/desktop/apt/keys.asc" "/usr/share/keyrings/signal-desktop-keyring.gpg"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/signal-desktop-keyring.gpg] https://updates.signal.org/desktop/apt xenial main" > /etc/apt/sources.list.d/signal-desktop.list
-
-# --- Brave ---
-add_repo_key "https://brave-browser-apt-release.s3.brave.com/brave-browser-archive-keyring.gpg" "/usr/share/keyrings/brave-browser-archive-keyring.gpg"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/brave-browser-archive-keyring.gpg] https://brave-browser-apt-release.s3.brave.com/ stable main" > /etc/apt/sources.list.d/brave-browser-release.list
-
-# --- 1Password ---
-add_repo_key "https://downloads.1password.com/linux/keys/1password.asc" "/usr/share/keyrings/1password-archive-keyring.gpg"
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/1password-archive-keyring.gpg] https://downloads.1password.com/linux/debian/amd64 stable main" > /etc/apt/sources.list.d/1password.list
-mkdir -p /etc/debsig/policies/AC2D62742012EA22/
-curl -sS https://downloads.1password.com/linux/debian/debsig/1password.pol > /etc/debsig/policies/AC2D62742012EA22/1password.pol
-mkdir -p /usr/share/debsig/keyrings/AC2D62742012EA22
-curl -sS https://downloads.1password.com/linux/keys/1password.asc | gpg --dearmor --yes --output /usr/share/debsig/keyrings/AC2D62742012EA22/debsig.gpg
-
 # 5. INSTALĀCIJA
 print_step "Programmatūras Instalācija"
 
-log "Atjaunina sarakstus..."
+log "Atjaunina sarakstus (Pēc labojumiem)..."
 apt update
 
 echo ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true | debconf-set-selections
 apt install -y ttf-mscorefonts-installer
 
-# Instalē Firefox no Mozilla repo (pateicoties Pinning)
 PACKAGES="firefox spotify-client signal-desktop brave-browser mullvad-browser 1password pipx flatpak curl wget unzip timeshift cpufrequtils ufw"
 log "Instalē pamatprogrammas: $PACKAGES"
 apt install -y $PACKAGES
@@ -229,57 +231,49 @@ ufw enable
 ufw logging off
 
 # Kernel Hardening (Restrict dmesg)
-log "Ierobežo pieeju kodola logiem (dmesg)..."
 echo "kernel.dmesg_restrict=1" > /etc/sysctl.d/6-dmesg-sudo.conf
 sysctl -p /etc/sysctl.d/6-dmesg-sudo.conf 2>/dev/null
 
-# Zswap & Swappiness
-# Aprēķina RAM
-TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
-TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
-
-if [ "$TOTAL_RAM_GB" -le 8 ]; then
-    SWAPPINESS_VAL=30
-    GRUB_ADD="zswap.enabled=1 zswap.max_pool_percent=40 zswap.zpool=zsmalloc zswap.compressor=lz4"
-else
-    SWAPPINESS_VAL=60
-    GRUB_ADD="zswap.enabled=1 zswap.zpool=zsmalloc zswap.compressor=lz4"
-fi
-
-echo "vm.swappiness=$SWAPPINESS_VAL" > /etc/sysctl.d/99-mint-swappiness.conf
-sysctl -p /etc/sysctl.d/99-mint-swappiness.conf
-
-# GRUB Update
-GRUB_FILE="/etc/default/grub"
-if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
-    log "Atjaunina GRUB..."
-    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
-    update-grub
-fi
-
-# Initramfs Update
-MODULES_FILE="/etc/initramfs-tools/modules"
-if [ -f "$MODULES_FILE" ] && ! grep -q "zsmalloc" "$MODULES_FILE"; then
-    echo "zsmalloc" >> "$MODULES_FILE"
-    update-initramfs -uk all
-fi
-
-# 9. DISK & CPU
+# 9. CPU & DISK
 print_step "CPU & Diska Optimizācija"
 
 # CPU Performance
 echo 'GOVERNOR="performance"' > /etc/default/cpufrequtils
 systemctl restart cpufrequtils 2>/dev/null
 
-# Disk Write Buffers
-if [ "$TOTAL_RAM_GB" -gt 4 ]; then
-    echo "vm.dirty_bytes=524288000" > /etc/sysctl.d/8-writing.conf
-    echo "vm.dirty_background_bytes=262144000" >> /etc/sysctl.d/8-writing.conf
+# Zswap & Swappiness & Dirty Bytes
+TOTAL_RAM_KB=$(grep MemTotal /proc/meminfo | awk '{print $2}')
+TOTAL_RAM_GB=$((TOTAL_RAM_KB / 1024 / 1024))
+
+if [ "$TOTAL_RAM_GB" -le 8 ]; then
+    SWAPPINESS_VAL=30
+    GRUB_ADD="zswap.enabled=1 zswap.max_pool_percent=40 zswap.zpool=zsmalloc zswap.compressor=lz4"
+    DIRTY_BYTES=314572800
+    DIRTY_BG_BYTES=157286400
 else
-    echo "vm.dirty_bytes=314572800" > /etc/sysctl.d/8-writing.conf
-    echo "vm.dirty_background_bytes=157286400" >> /etc/sysctl.d/8-writing.conf
+    SWAPPINESS_VAL=60
+    GRUB_ADD="zswap.enabled=1 zswap.zpool=zsmalloc zswap.compressor=lz4"
+    DIRTY_BYTES=524288000
+    DIRTY_BG_BYTES=262144000
 fi
-sysctl -p /etc/sysctl.d/8-writing.conf
+
+echo "vm.swappiness=$SWAPPINESS_VAL" > /etc/sysctl.d/99-mint-swappiness.conf
+echo "vm.dirty_bytes=$DIRTY_BYTES" > /etc/sysctl.d/8-writing.conf
+echo "vm.dirty_background_bytes=$DIRTY_BG_BYTES" >> /etc/sysctl.d/8-writing.conf
+sysctl -p /etc/sysctl.d/99-mint-swappiness.conf
+
+# GRUB & Initramfs
+GRUB_FILE="/etc/default/grub"
+if grep -q "GRUB_CMDLINE_LINUX_DEFAULT" "$GRUB_FILE"; then
+    log "Atjaunina GRUB..."
+    sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet splash '"$GRUB_ADD"'"/' "$GRUB_FILE"
+    update-grub
+fi
+MODULES_FILE="/etc/initramfs-tools/modules"
+if [ -f "$MODULES_FILE" ] && ! grep -q "zsmalloc" "$MODULES_FILE"; then
+    echo "zsmalloc" >> "$MODULES_FILE"
+    update-initramfs -uk all
+fi
 
 # 10. PĀRLŪKU & UI IESTATĪJUMI
 print_step "UI & Privātums"
@@ -290,7 +284,7 @@ sed -i "s/#DNS=/DNS=9.9.9.9 149.112.112.112/" /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
-# Browser Policies (SSD Saver + No-AI + 1GB Cache + WebPush Disable)
+# Browser Policies
 mkdir -p /etc/firefox/policies /usr/lib/firefox/distribution
 cat <<EOF > /etc/firefox/policies/policies.json
 {
@@ -331,8 +325,7 @@ if [ -f "/usr/bin/cinnamon-session" ]; then
 fi
 
 print_step "Pabeigts!"
-echo -e "${GREEN}Sistēma konfigurēta (v42 - Security Hardened).${NC}"
-echo "Drošība: UFW, Kernel Hardening, Clean Apps."
-echo "Firefox: Official Mozilla (No WebPush, No AI)."
+echo -e "${GREEN}Sistēma konfigurēta (v43 - Repo Rescue).${NC}"
+echo "Repozitoriji: Pilnībā pārinstalēti un iztīrīti."
 echo -e "${YELLOW}Lūdzu, PĀRSTARTĒJIET DATORU!${NC}"
 exit 0
